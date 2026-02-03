@@ -8,7 +8,7 @@ from videodb.capture import CaptureClient
 # Config
 BACKEND_URL = "http://localhost:5002"
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -33,7 +33,7 @@ async def run_capture(token, session_id):
     print("\n🎥 --- Starting Capture Client ---")
 
     # Initialize Client
-    client = CaptureClient(upload_token=token, base_url="https://api.videodb.io")
+    client = CaptureClient(upload_token=token)
 
     # Stop event for graceful shutdown
     stop_event = asyncio.Event()
@@ -162,7 +162,7 @@ async def main():
     session_data = await init_session()
     token = session_data["token"]
     session_id = session_data["session_id"]
-    print(f"✅ Session created successfully")
+    print("✅ Session created successfully")
     print(f"   🔑 Token: {token[:10]}...")
     print(f"   📋 Session ID: {session_id}\n")
 

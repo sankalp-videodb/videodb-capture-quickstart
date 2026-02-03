@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 # Config
 VIDEO_DB_API_KEY = os.getenv("VIDEO_DB_API_KEY")
-BASE_URL = os.getenv("VIDEO_DB_API", "https://api.videodb.io")
 PORT = 5002
 
 if not VIDEO_DB_API_KEY:
@@ -32,8 +31,8 @@ public_url = None
 
 def init_app():
     global conn, public_url
-    print(f"🔌 Connecting to VideoDB at {BASE_URL}...")
-    conn = videodb.connect(api_key=VIDEO_DB_API_KEY, base_url=BASE_URL)
+    print("🔌 Connecting to VideoDB...")
+    conn = videodb.connect(api_key=VIDEO_DB_API_KEY)
 
     # Start Cloudflare Tunnel
     print(f"🚇 Starting Cloudflare Tunnel on port {PORT}...")

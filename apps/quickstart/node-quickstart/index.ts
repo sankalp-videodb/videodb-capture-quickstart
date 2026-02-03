@@ -8,7 +8,6 @@ import { CaptureClient } from 'videodb/capture';
 
 const API_KEY = process.env.VIDEODB_API_KEY;
 const COLLECTION_ID = process.env.VIDEODB_COLLECTION_ID || 'default';
-const BASE_URL = process.env.VIDEODB_BASE_URL || 'https://api.videodb.io';
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
 if (!API_KEY) {
@@ -118,7 +117,7 @@ async function main() {
   console.log('╚════════════════════════════════════════════════════════════╝\x1b[0m\n');
 
   info('Connecting to VideoDB...');
-  const conn = connect({ apiKey: API_KEY, baseUrl: BASE_URL });
+  const conn = connect({ apiKey: API_KEY });
   
   const usage = await conn.checkUsage();
   const userId = (usage.userId as string) || 'demo-user';
@@ -147,9 +146,6 @@ async function main() {
   success('Client token generated (1 hour expiry)');
 
   info('Initializing CaptureClient...');
-  // Note: CaptureClient currently doesn't support passing baseUrl to the binary
-  // The binary uses its hardcoded default (https://api.dev.videodb.io)
-  // TODO: Update SDK to support baseUrl parameter once available
   const client = new CaptureClient({ sessionToken: token });
 
   client.on('recording:started', (payload) => {
