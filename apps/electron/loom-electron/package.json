@@ -1,0 +1,92 @@
+{
+  "name": "async-recorder",
+  "version": "1.4.8",
+  "description": "A sample Electron application for screen and camera recording using VideoDB Recorder SDK",
+  "main": "main.js",
+  "scripts": {
+    "setup": "./scripts/setup.sh",
+    "start": "./scripts/start-server.sh",
+    "electron": "electron .",
+    "dist": "electron-builder",
+    "pack": "electron-builder --dir",
+    "reset-permissions": "bash scripts/reset-permissions.sh",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "VideoDB",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^39.0.0",
+    "electron-builder": "^24.6.4"
+  },
+  "build": {
+    "appId": "com.videodb.async-recorder",
+    "productName": "Async Recorder",
+    "files": [
+      "main.js",
+      "renderer.js",
+      "preload.js",
+      "index.html",
+      "config.json",
+      "package.json",
+      "resources/**/*",
+      "node_modules/videodb/**/*"
+    ],
+    "mac": {
+      "identity": null,
+      "extendInfo": {
+        "NSScreenCaptureUsageDescription": "Async Recorder needs screen recording permission to capture your display during sessions.",
+        "NSMicrophoneUsageDescription": "Async Recorder needs microphone access to capture audio during sessions.",
+        "NSCameraUsageDescription": "Async Recorder needs camera access to capture your webcam during sessions."
+      },
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "extraResources": [
+      {
+        "from": "resources/manage-service.sh",
+        "to": "manage-service.sh"
+      },
+      {
+        "from": "resources/service-core",
+        "to": "../MacOS/service-core"
+      },
+      {
+        "from": "resources/libservicebridge.dylib",
+        "to": "../MacOS/libservicebridge.dylib"
+      },
+      {
+        "from": "resources/logs",
+        "to": "logs"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/videodb/**/*"
+    ]
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "sqlite3": "^5.1.7",
+    "videodb": "github:video-db/videodb-node#release-0.4.0"
+  }
+}
