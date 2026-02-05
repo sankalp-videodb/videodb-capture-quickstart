@@ -5,7 +5,7 @@
 1. Fork and clone the repository:
    ```bash
    git clone https://github.com/video-db/videodb-capture-quickstart.git
-   cd videodb-capture-quickstart/apps/electron/sales-copilot
+   cd videodb-capture-quickstart/apps/electron/meeting-copilot
    ```
 
 2. Install dependencies:

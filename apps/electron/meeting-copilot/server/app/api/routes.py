@@ -403,7 +403,12 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, db
     Key event: capture_session.exported - video is ready for playback.
     """
     try:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            # Handle health checks or empty requests gracefully
+            return {"status": "ok", "received": True}
+
         print("\n--- 🔔 Webhook Event ---")
 
         event_type = body.get('event', 'unknown')
@@ -448,7 +453,8 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, db
                     print(f"✅ Recording created: {recording.video_id}")
 
                 # Trigger video indexing in background
-                user = db.query(User).first()
+                # Use most recent user (handles re-registration with new API key)
+                user = db.query(User).order_by(User.id.desc()).first()
                 if user and user.api_key and recording.video_id:
                     background_tasks.add_task(
                         process_indexing_background,

@@ -172,7 +172,7 @@ function setupCaptureClientEvents(client) {
   });
 }
 
-// IPC Handlers for Recorder SDK
+// IPC Handlers for Capture SDK
 // Helper function to get or fetch session token
 async function getSessionToken() {
   // Check if we have a valid cached token

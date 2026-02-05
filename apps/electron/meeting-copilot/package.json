@@ -1,7 +1,7 @@
 {
   "name": "meeting-copilot",
   "version": "1.4.0",
-  "description": "A sample Electron application for meetings using VideoDB Recorder SDK",
+  "description": "A sample Electron application for meetings using VideoDB Capture SDK",
   "main": "frontend/main.js",
   "scripts": {
     "start": "./scripts/start-server.sh",

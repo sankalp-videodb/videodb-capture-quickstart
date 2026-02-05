@@ -563,6 +563,15 @@ ipcMain.handle('recorder-stop-recording', async (_event, sessionId) => {
       await captureClient.stopCaptureSession();
       console.log('Capture session stopped');
 
+      // Shutdown the capture client to release the binary
+      try {
+        await captureClient.shutdown();
+        console.log('CaptureClient shutdown complete');
+      } catch (shutdownErr) {
+        console.warn('CaptureClient shutdown warning:', shutdownErr.message);
+      }
+      captureClient = null;
+
       // Manually emit recording:stopped event to update UI
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('recorder-event', {
