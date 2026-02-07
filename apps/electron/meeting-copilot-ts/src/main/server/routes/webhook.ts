@@ -33,7 +33,7 @@ webhookRouter.post('/webhook', async (c) => {
     const sessionId = payload.capture_session_id;
 
     if (!sessionId) {
-      logger.warn('Webhook received without session ID');
+      logger.debug({ event: payload.event, data: payload.data }, 'Webhook received without session ID');
       return c.json({ status: 'ok', received: true });
     }
 
@@ -46,6 +46,21 @@ webhookRouter.post('/webhook', async (c) => {
 
       case 'capture_session.active': {
         logger.info({ sessionId }, 'Capture session is now active');
+        break;
+      }
+
+      case 'capture_session.created': {
+        logger.debug({ sessionId }, 'Capture session created acknowledgment received');
+        break;
+      }
+
+      case 'capture_session.stopped': {
+        logger.info({ sessionId }, 'Capture session stopped, waiting for export');
+        break;
+      }
+      
+      case 'capture_session.starting': {
+        logger.info({ sessionId }, 'Capture session starting');
         break;
       }
 

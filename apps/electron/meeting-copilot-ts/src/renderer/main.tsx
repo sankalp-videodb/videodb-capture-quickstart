@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { trpc, createTrpcClient } from './api/trpc';
+import { trpc, createTrpcClient, getApiPort } from './api/trpc';
 import { useConfigStore } from './stores/config.store';
 import { App } from './App';
 import './styles/globals.css';
 
-function TrpcProvider({ children }: { children: React.ReactNode }) {
+function TrpcProvider({ children, port }: { children: React.ReactNode; port: number }) {
   const configStore = useConfigStore();
 
   const [queryClient] = useState(
@@ -22,7 +22,7 @@ function TrpcProvider({ children }: { children: React.ReactNode }) {
   );
 
   const [trpcClient] = useState(() =>
-    createTrpcClient(() => configStore.accessToken)
+    createTrpcClient(() => configStore.accessToken, port)
   );
 
   return (
@@ -32,12 +32,32 @@ function TrpcProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+function Root() {
+  const [port, setPort] = useState<number | null>(null);
+
+  useEffect(() => {
+    getApiPort().then(setPort);
+  }, []);
+
+  if (port === null) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <p className="text-muted-foreground">Connecting...</p>
+      </div>
+    );
+  }
+
+  return (
+    <TrpcProvider port={port}>
+      <App />
+    </TrpcProvider>
+  );
+}
+
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 
 root.render(
   <React.StrictMode>
-    <TrpcProvider>
-      <App />
-    </TrpcProvider>
+    <Root />
   </React.StrictMode>
 );

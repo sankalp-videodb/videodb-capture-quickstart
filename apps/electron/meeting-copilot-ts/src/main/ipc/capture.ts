@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow } from 'electron';
 import { CaptureClient } from 'videodb/capture';
 import { connect } from 'videodb';
 import type { WebSocketConnection, WebSocketMessage } from 'videodb';
-import type { CaptureConfig, Channel } from '../../shared/schemas/capture.schema';
+import type { Channel } from '../../shared/schemas/capture.schema';
 import type { RecorderEvent, TranscriptEvent, StartRecordingParams } from '../../shared/types/ipc.types';
 import { registerSessionUser } from '../server/routes/webhook';
 import { createChildLogger } from '../lib/logger';
@@ -102,14 +102,18 @@ async function listenForMessages(ws: WebSocketConnection, source: 'mic' | 'syste
       const channel = (msg.channel || msg.type || msg.event_type || 'event') as string;
 
       if (channel === 'transcript' || msg.text) {
-        const text = (msg.text || (msg.data as Record<string, unknown>)?.text || '') as string;
-        const isFinal = (msg.is_final ?? msg.isFinal ?? (msg.data as Record<string, unknown>)?.is_final ?? false) as boolean;
-        const transcriptSource = (msg.source || (msg.data as Record<string, unknown>)?.source || source) as 'mic' | 'system_audio';
+        const msgData = msg.data as Record<string, unknown>;
+        const text = (msgData.text || msg.text || '') as string;
+        const isFinal = (msgData.is_final ?? msg.is_final ?? msg.isFinal ?? false) as boolean;
+        const start = (msgData.start ?? msg.start) as number;
+        const end = (msgData.end ?? msg.end) as number;
 
         const transcriptEvent: TranscriptEvent = {
           text,
           isFinal,
-          source: transcriptSource,
+          source, // Use the WebSocket source (mic or system_audio)
+          start,
+          end,
         };
 
         sendRecorderEvent({
@@ -267,10 +271,11 @@ export function setupCaptureHandlers(): void {
     }> => {
       const { config, sessionToken, accessToken, apiUrl, enableTranscription } = params;
 
-      logger.info({ sessionId: config.sessionId, enableTranscription }, 'Starting recording');
+      logger.info({ sessionId: config.sessionId, enableTranscription }, 'Starting recording - IPC handler called');
 
       try {
         // Register session for webhook processing
+        logger.debug('Registering session user for webhook processing');
         registerSessionUser(config.sessionId, accessToken);
 
         // Setup WebSocket connections for real-time transcripts (like Python meeting-copilot)
@@ -285,38 +290,112 @@ export function setupCaptureHandlers(): void {
           }
         }
 
-        // Reuse existing CaptureClient (created during listChannels) or create new one
-        if (!captureClient) {
-          logger.info('Creating new CaptureClient for recording');
+        // === PYTHON PATTERN: Create fresh CaptureClient each time ===
+        // Clean up any existing client first
+        if (captureClient) {
+          logger.info('Cleaning up existing CaptureClient before creating new one');
+          removeCaptureEventListeners();
+          try {
+            await captureClient.shutdown();
+          } catch (e) {
+            // Ignore shutdown errors
+          }
+          captureClient = null;
+        }
+
+        // === PYTHON PATTERN: Create CaptureClient and list channels ===
+        // Python version: Creates client, sets up events, then calls listChannels()
+        logger.info('Creating new CaptureClient');
           captureClient = new CaptureClient({
             sessionToken,
             ...(apiUrl && { apiUrl }),
           });
-        } else {
-          logger.info('Reusing existing CaptureClient for recording');
-          // Remove any existing event listeners to prevent memory leaks
-          removeCaptureEventListeners();
-        }
 
-        // Set up event listeners with stored references for cleanup
+        // Set up ALL event listeners BEFORE listing channels (like Python's setupCaptureClientEvents)
         setupCaptureEventListeners();
 
-        // NOTE: We no longer use CaptureClient transcript events.
-        // Real-time transcripts are delivered via WebSocket connections (like Python meeting-copilot).
-        // The backend will call rtstream.startTranscript(ws_connection_id) to route transcripts.
+        // === PYTHON PATTERN: List channels and find by prefix ===
+        // Python version successfully calls listChannels() and finds channels by prefix
+        let captureChannels: Array<{ channelId: string; type: 'audio' | 'video'; record: boolean; transcript?: boolean }> = [];
+        
+        try {
+          logger.info('Listing available channels (Python pattern)');
+          const channels = await captureClient.listChannels();
+          logger.info({ channelCount: channels.length }, 'Channels listed successfully');
+          
+          // Find channels by prefix/type like Python does
+          const micChannel = channels.find(ch => ch.type === 'audio' && ch.channelId.startsWith('mic:'));
+          if (micChannel && config.streams?.microphone !== false) {
+            captureChannels.push({
+              channelId: micChannel.channelId,
+              type: 'audio',
+              record: true,
+              transcript: enableTranscription,
+            });
+          }
 
-        // List available channels
-        const availableChannels = await captureClient.listChannels();
-        logger.debug({ availableChannels }, 'Available channels');
+          const systemAudioChannel = channels.find(ch => ch.type === 'audio' && ch.channelId.startsWith('system_audio:'));
+          if (systemAudioChannel && config.streams?.systemAudio !== false) {
+            captureChannels.push({
+              channelId: systemAudioChannel.channelId,
+              type: 'audio',
+              record: true,
+              transcript: enableTranscription,
+            });
+          }
 
-        // Build channel configuration
-        const channelConfigs = buildChannelConfigs(availableChannels, config.channels);
+          const displayChannel = channels.find(ch => ch.type === 'video');
+          if (displayChannel && config.streams?.screen !== false) {
+            captureChannels.push({
+              channelId: displayChannel.channelId,
+              type: 'video',
+              record: true,
+            });
+          }
+          
+          logger.info({ captureChannels }, 'Channel configs prepared from listed channels');
+        } catch (listError) {
+          // Fallback: If listChannels fails, use simple channel IDs
+          logger.warn({ error: listError }, 'listChannels failed, using fallback channel IDs');
+          
+          if (config.streams?.microphone !== false) {
+            captureChannels.push({ channelId: 'mic', type: 'audio', record: true, transcript: enableTranscription });
+          }
+          if (config.streams?.systemAudio !== false) {
+            captureChannels.push({ channelId: 'system_audio', type: 'audio', record: true, transcript: enableTranscription });
+          }
+          if (config.streams?.screen !== false) {
+            captureChannels.push({ channelId: 'screen', type: 'video', record: true });
+          }
+          
+          logger.info({ captureChannels }, 'Using fallback channel IDs');
+        }
 
-        // Start capture session
+        if (captureChannels.length === 0) {
+          throw new Error('No capture channels available. Check permissions.');
+        }
+
+        if (captureChannels.length === 0) {
+          throw new Error('No capture channels available. Check permissions.');
+        }
+
+        // === PYTHON PATTERN: Start capture session directly ===
+        // Python version: await captureClient.startCaptureSession({ sessionId, channels });
+        logger.info({ captureChannels }, 'Starting capture with channels');
         await captureClient.startCaptureSession({
           sessionId: config.sessionId,
-          channels: channelConfigs,
+          channels: captureChannels,
         });
+        logger.info({ sessionId: config.sessionId }, 'Capture session started');
+
+        // IMPORTANT: Manually emit recording:started event immediately after startCaptureSession returns.
+        // This matches the Python meeting-copilot behavior which doesn't wait for SDK event.
+        logger.info({ sessionId: config.sessionId }, 'Emitting recording:started event to renderer');
+        sendRecorderEvent({
+          event: 'recording:started',
+          data: { sessionId: config.sessionId },
+        });
+        logger.info({ sessionId: config.sessionId }, 'recording:started event emitted');
 
         return {
           success: true,
@@ -347,8 +426,20 @@ export function setupCaptureHandlers(): void {
           removeCaptureEventListeners();
 
           await captureClient.stopCaptureSession();
+          logger.info('Capture session stopped');
+
           await captureClient.shutdown();
+          logger.info('CaptureClient shutdown complete');
           captureClient = null;
+
+          // IMPORTANT: Manually emit recording:stopped event immediately (like Python version)
+          // This ensures UI updates reliably without waiting for SDK events
+          sendRecorderEvent({
+            event: 'recording:stopped',
+            data: {},
+          });
+        } else {
+          logger.warn('No active capture client to stop');
         }
 
         // Cleanup WebSocket connections (like Python meeting-copilot)
@@ -388,6 +479,8 @@ export function setupCaptureHandlers(): void {
   ipcMain.handle(
     'recorder-list-channels',
     async (_event, sessionToken: string, apiUrl?: string): Promise<Channel[]> => {
+      logger.info('recorder-list-channels IPC handler called');
+      
       // Reuse existing captureClient if available, otherwise create one
       // This prevents the "Another recorder instance" error
       if (!captureClient) {
@@ -396,10 +489,33 @@ export function setupCaptureHandlers(): void {
           sessionToken,
           ...(apiUrl && { apiUrl }),
         });
+        
+        // Set up minimal error listener immediately (like Python version does)
+        // This might be required for the SDK to function properly
+        captureClient.on('error', (error: unknown) => {
+          logger.error({ error }, 'CaptureClient error during channel listing');
+        });
+        
+        logger.info('CaptureClient created, calling listChannels...');
+      } else {
+        logger.info('Reusing existing CaptureClient for listing channels');
       }
 
       try {
-        const channels = await captureClient.listChannels();
+        logger.info('Calling captureClient.listChannels()...');
+        
+        // Add timeout wrapper to detect hanging
+        const listChannelsWithTimeout = async (timeoutMs: number = 30000) => {
+          return Promise.race([
+            captureClient!.listChannels(),
+            new Promise<never>((_, reject) => 
+              setTimeout(() => reject(new Error(`listChannels timed out after ${timeoutMs}ms`)), timeoutMs)
+            )
+          ]);
+        };
+        
+        const channels = await listChannelsWithTimeout(30000);
+        logger.info({ channelCount: channels.length, channels }, 'listChannels returned');
         return channels.map((ch: { channelId: string; type: string; name?: string }) => ({
           channelId: ch.channelId,
           type: ch.type as 'audio' | 'video',
@@ -434,27 +550,6 @@ export function setupCaptureHandlers(): void {
       }
     }
   );
-}
-
-function buildChannelConfigs(
-  availableChannels: Array<{ channelId: string; type: string }>,
-  requestedChannels: CaptureConfig['channels']
-): Array<{ channelId: string; type: 'audio' | 'video'; record: boolean; transcript?: boolean }> {
-  const configs: Array<{ channelId: string; type: 'audio' | 'video'; record: boolean; transcript?: boolean }> = [];
-
-  for (const requested of requestedChannels) {
-    const available = availableChannels.find((ch) => ch.channelId === requested.channelId);
-    if (!available) continue;
-
-    configs.push({
-      channelId: requested.channelId,
-      type: requested.type as 'audio' | 'video',
-      record: requested.record,
-      transcript: requested.transcript,
-    });
-  }
-
-  return configs;
 }
 
 /**

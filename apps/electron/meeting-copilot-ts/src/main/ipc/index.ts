@@ -2,6 +2,7 @@ import { ipcMain } from 'electron';
 import { setupCaptureHandlers } from './capture';
 import { setupPermissionHandlers } from './permissions';
 import { setupAppHandlers } from './app';
+import { setupCopilotHandlers, removeCopilotHandlers, setCopilotMainWindow } from './copilot';
 import { createChildLogger } from '../lib/logger';
 
 const logger = createChildLogger('ipc');
@@ -12,6 +13,7 @@ export function setupIpcHandlers(): void {
   setupCaptureHandlers();
   setupPermissionHandlers();
   setupAppHandlers();
+  setupCopilotHandlers();
 
   logger.info('IPC handlers registered');
 }
@@ -35,12 +37,17 @@ export function removeIpcHandlers(): void {
 
   // App handlers
   ipcMain.removeHandler('get-settings');
+  ipcMain.removeHandler('get-server-port');
   ipcMain.removeHandler('logout');
   ipcMain.removeHandler('open-external-link');
   ipcMain.removeHandler('show-notification');
   ipcMain.removeHandler('open-player-window');
 
+  // Sales Co-Pilot handlers
+  removeCopilotHandlers();
+
   logger.info('IPC handlers removed');
 }
 
 export { sendToRenderer, getMainWindow, setMainWindow, shutdownCaptureClient, isCaptureActive } from './capture';
+export { setCopilotMainWindow } from './copilot';

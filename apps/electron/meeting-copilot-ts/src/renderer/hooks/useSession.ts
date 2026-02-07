@@ -2,6 +2,7 @@ import { useEffect, useCallback, useRef } from 'react';
 import { useSessionStore } from '../stores/session.store';
 import { useTranscriptionStore } from '../stores/transcription.store';
 import { useConfigStore } from '../stores/config.store';
+import { useCopilotStore } from '../stores/copilot.store';
 import { trpc } from '../api/trpc';
 import { electronAPI } from '../api/ipc';
 
@@ -86,70 +87,44 @@ export function useSession() {
       const captureSession = await createSessionMutation.mutateAsync({});
       console.log('[useSession] Capture session created:', captureSession);
 
-      // Get available channels
-      const channels = await electronAPI.capture.listChannels(sessionToken, apiUrl || undefined);
+      // Pass stream preferences to main process (like Python pattern)
+      // Main process will handle channel discovery via listChannels()
+      console.log('[useSession] Step 4: Preparing streams config for main process');
+      
+      const streamsConfig = {
+        microphone: sessionStore.streams.microphone,
+        systemAudio: sessionStore.streams.systemAudio,
+        screen: sessionStore.streams.screen,
+      };
 
-      // Build channel configuration
-      const channelConfigs = [];
-
-      // Find microphone channel
-      const micChannel = channels.find(
-        (ch) => ch.type === 'audio' && ch.channelId.startsWith('mic:')
-      );
-      if (micChannel && sessionStore.streams.microphone) {
-        channelConfigs.push({
-          channelId: micChannel.channelId,
-          type: 'audio' as const,
-          record: true,
-          transcript: transcriptionStore.enabled,
-        });
+      // Ensure at least one stream is enabled
+      if (!streamsConfig.microphone && !streamsConfig.systemAudio && !streamsConfig.screen) {
+        throw new Error('No streams enabled for recording');
       }
 
-      // Find system audio channel
-      const sysAudioChannel = channels.find(
-        (ch) => ch.type === 'audio' && ch.channelId.startsWith('system_audio:')
-      );
-      if (sysAudioChannel && sessionStore.streams.systemAudio) {
-        channelConfigs.push({
-          channelId: sysAudioChannel.channelId,
-          type: 'audio' as const,
-          record: true,
-          transcript: transcriptionStore.enabled,
-        });
-      }
+      console.log('[useSession] Streams config:', streamsConfig);
 
-      // Find display channel
-      const displayChannel = channels.find((ch) => ch.type === 'video');
-      if (displayChannel && sessionStore.streams.screen) {
-        channelConfigs.push({
-          channelId: displayChannel.channelId,
-          type: 'video' as const,
-          record: true,
-        });
-      }
-
-      if (channelConfigs.length === 0) {
-        throw new Error('No channels available for recording');
-      }
-
-      // Start recording via IPC
+      // Start recording via IPC (Python pattern - pass streams, main process handles channels)
+      console.log('[useSession] Step 5: Calling startRecording IPC...');
       const result = await electronAPI.capture.startRecording({
         config: {
           sessionId: captureSession.sessionId,
-          channels: channelConfigs,
+          streams: streamsConfig,
         },
         sessionToken,
         accessToken,
-        apiUrl,
+        apiUrl: apiUrl || undefined,
         enableTranscription: transcriptionStore.enabled,
       });
+
+      console.log('[useSession] startRecording IPC result:', result);
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to start recording');
       }
 
       // Create recording entry in database
-      console.log('[useSession] Step 5: Creating recording entry in database');
+      console.log('[useSession] Step 6: Creating recording entry in database');
       const recordingResult = await startRecordingMutation.mutateAsync({
         sessionId: captureSession.sessionId,
       });
@@ -169,6 +144,25 @@ export function useSession() {
           sysAudioWsConnectionId: result.sysAudioWsConnectionId,
         });
         console.log('[useSession] Transcription started');
+      }
+
+      // Start Sales Co-Pilot if transcription is enabled
+      if (transcriptionStore.enabled && recordingResult?.id) {
+        console.log('[useSession] Step 6b: Starting Sales Co-Pilot');
+        try {
+          const copilotResult = await electronAPI.copilot.startCall(
+            recordingResult.id,
+            captureSession.sessionId
+          );
+          if (copilotResult.success) {
+            useCopilotStore.getState().startCall(recordingResult.id);
+            console.log('[useSession] Sales Co-Pilot started');
+          } else {
+            console.warn('[useSession] Failed to start Co-Pilot:', copilotResult.error);
+          }
+        } catch (copilotError) {
+          console.warn('[useSession] Error starting Co-Pilot:', copilotError);
+        }
       }
 
       console.log('[useSession] Step 7: Recording started successfully');
@@ -213,6 +207,26 @@ export function useSession() {
         console.log('[useSession] Stop recording mutation result:', stopResult);
       }
 
+      // Stop Sales Co-Pilot and get summary
+      if (useCopilotStore.getState().isCallActive) {
+        console.log('[useSession] Stopping Sales Co-Pilot');
+        try {
+          const copilotResult = await electronAPI.copilot.endCall();
+          if (copilotResult.success) {
+            console.log('[useSession] Sales Co-Pilot stopped, summary generated');
+            if (copilotResult.summary) {
+              // Duration is tracked in the store from call start
+              const duration = useCopilotStore.getState().callDuration || 0;
+              useCopilotStore.getState().setCallSummary(copilotResult.summary, duration);
+            }
+          } else {
+            console.warn('[useSession] Failed to stop Co-Pilot:', copilotResult.error);
+          }
+        } catch (copilotError) {
+          console.warn('[useSession] Error stopping Co-Pilot:', copilotError);
+        }
+      }
+
       console.log('[useSession] Recording stopped, waiting for webhook...');
       sessionStore.stopSession();
     } catch (error) {
@@ -229,19 +243,15 @@ export function useSession() {
       const currentState = sessionStore.streams[stream];
       sessionStore.toggleStream(stream);
 
-      // If recording, pause/resume the track
-      if (sessionStore.status === 'recording' && sessionStore.sessionToken) {
-        // Get track ID based on stream type
-        const channels = await electronAPI.capture.listChannels(sessionStore.sessionToken, configStore.apiUrl || undefined);
-        let channelId: string | undefined;
-
-        if (stream === 'microphone') {
-          channelId = channels.find((ch) => ch.channelId.startsWith('mic:'))?.channelId;
-        } else if (stream === 'systemAudio') {
-          channelId = channels.find((ch) => ch.channelId.startsWith('system_audio:'))?.channelId;
-        } else if (stream === 'screen') {
-          channelId = channels.find((ch) => ch.type === 'video')?.channelId;
-        }
+      // If recording, pause/resume the track using standard channel names
+      if (sessionStore.status === 'recording') {
+        // Map stream type to standard channel ID
+        const channelIdMap: Record<string, string> = {
+          microphone: 'mic',
+          systemAudio: 'system_audio',
+          screen: 'screen',
+        };
+        const channelId = channelIdMap[stream];
 
         if (channelId) {
           if (currentState) {
@@ -252,7 +262,7 @@ export function useSession() {
         }
       }
     },
-    [sessionStore, configStore]
+    [sessionStore]
   );
 
   return {

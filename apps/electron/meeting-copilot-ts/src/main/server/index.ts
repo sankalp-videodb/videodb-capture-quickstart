@@ -48,26 +48,45 @@ export function createServer(port: number) {
   return app;
 }
 
-export async function startServer(port: number): Promise<void> {
+let currentPort: number | undefined;
+
+export async function startServer(port: number, maxRetries: number = 10): Promise<number> {
   if (server) {
     logger.warn('Server already running');
-    return;
+    return currentPort || port;
   }
 
   const app = createServer(port);
 
-  return new Promise((resolve) => {
-    server = serve(
-      {
-        fetch: app.fetch,
-        port,
-      },
-      (info) => {
-        logger.info({ port: info.port }, 'HTTP server started');
-        resolve();
-      }
-    );
-  });
+  const tryPort = (attemptPort: number, retriesLeft: number): Promise<number> => {
+    return new Promise((resolve, reject) => {
+      const serverInstance = serve(
+        {
+          fetch: app.fetch,
+          port: attemptPort,
+        },
+        (info) => {
+          server = serverInstance;
+          currentPort = info.port;
+          logger.info({ port: info.port }, 'HTTP server started');
+          resolve(info.port);
+        }
+      );
+
+      // Handle errors (like EADDRINUSE)
+      serverInstance.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
+          logger.warn({ port: attemptPort }, 'Port in use, trying next port');
+          serverInstance.close();
+          resolve(tryPort(attemptPort + 1, retriesLeft - 1));
+        } else {
+          reject(err);
+        }
+      });
+    });
+  };
+
+  return tryPort(port, maxRetries);
 }
 
 export async function stopServer(): Promise<void> {
@@ -81,5 +100,6 @@ export async function stopServer(): Promise<void> {
 export function getServerStatus(): { running: boolean; port?: number } {
   return {
     running: !!server,
+    port: currentPort,
   };
 }

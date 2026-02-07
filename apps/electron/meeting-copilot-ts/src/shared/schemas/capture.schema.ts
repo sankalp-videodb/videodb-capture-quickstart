@@ -39,7 +39,12 @@ export const CaptureConfigSchema = z.object({
     type: z.enum(['audio', 'video']),
     record: z.boolean(),
     transcript: z.boolean().optional(),
-  })),
+  })).optional(),
+  streams: z.object({
+    microphone: z.boolean().optional(),
+    systemAudio: z.boolean().optional(),
+    screen: z.boolean().optional(),
+  }).optional(),
 });
 
 export type CreateCaptureSessionInput = z.infer<typeof CreateCaptureSessionInputSchema>;

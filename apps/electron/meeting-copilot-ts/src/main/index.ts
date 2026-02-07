@@ -4,7 +4,14 @@ import fs from 'fs';
 import { initDatabase, closeDatabase } from './db';
 import { startServer, stopServer } from './server';
 import { getTunnelService } from './services/tunnel.service';
-import { setupIpcHandlers, removeIpcHandlers, setMainWindow, sendToRenderer, shutdownCaptureClient } from './ipc';
+import {
+  setupIpcHandlers,
+  removeIpcHandlers,
+  setMainWindow,
+  setCopilotMainWindow,
+  sendToRenderer,
+  shutdownCaptureClient,
+} from './ipc';
 import {
   loadAppConfig,
   loadRuntimeConfig,
@@ -63,6 +70,7 @@ async function createWindow(): Promise<void> {
   });
 
   setMainWindow(mainWindow);
+  setCopilotMainWindow(mainWindow);
 
   // Load the app
   if (isDev) {
@@ -198,13 +206,13 @@ async function startServices(): Promise<void> {
   // Initialize database
   initDatabase();
 
-  // Start HTTP server
-  await startServer(port);
+  // Start HTTP server (will retry ports if in use)
+  const actualPort = await startServer(port);
 
   // Start tunnel for webhooks
-  logger.info({ port }, '🚇 About to start tunnel service...');
+  logger.info({ port: actualPort }, '🚇 About to start tunnel service...');
   try {
-    const tunnelService = getTunnelService(port);
+    const tunnelService = getTunnelService(actualPort);
     logger.info('🚇 Got tunnel service instance, calling start()...');
     const tunnelStatus = await tunnelService.start();
     logger.info({ tunnelStatus }, '🚇 Tunnel service start() completed');
@@ -242,12 +250,16 @@ async function stopServices(): Promise<void> {
 app.whenReady().then(async () => {
   logger.info('App starting');
 
-  // Apply VideoDB patches early, before any CaptureClient usage
-  // This patches the binary path resolution and DYLD_LIBRARY_PATH for packaged apps
-  try {
-    applyVideoDBPatches();
-  } catch (error) {
-    logger.error({ error }, 'Failed to apply VideoDB patches - recording may not work in production');
+  // Apply VideoDB patches only in packaged apps to avoid altering dev behavior
+  // Packaged apps need custom binary paths and DYLD_LIBRARY_PATH
+  if (app.isPackaged) {
+    try {
+      applyVideoDBPatches();
+    } catch (error) {
+      logger.error({ error }, 'Failed to apply VideoDB patches - recording may not work in production');
+    }
+  } else {
+    logger.info('Skipping VideoDB patches in development mode');
   }
 
   // Clean up any stale lock files from previous crashes

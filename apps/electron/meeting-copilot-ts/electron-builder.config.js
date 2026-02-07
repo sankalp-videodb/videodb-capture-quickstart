@@ -1,13 +1,49 @@
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 const { execSync } = require('child_process');
+
+/**
+ * Download a file from URL to destination
+ */
+function downloadFile(url, dest) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(dest);
+    https
+      .get(url, (response) => {
+        // Handle redirects
+        if (response.statusCode === 302 || response.statusCode === 301) {
+          file.close();
+          fs.unlinkSync(dest);
+          downloadFile(response.headers.location, dest).then(resolve).catch(reject);
+          return;
+        }
+        if (response.statusCode !== 200) {
+          file.close();
+          fs.unlinkSync(dest);
+          reject(new Error(`Failed to download: ${response.statusCode}`));
+          return;
+        }
+        response.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          resolve();
+        });
+      })
+      .on('error', (err) => {
+        file.close();
+        fs.unlink(dest, () => {});
+        reject(err);
+      });
+  });
+}
 
 /**
  * @type {import('electron-builder').Configuration}
  */
 const config = {
-  appId: 'com.videodb.meeting-copilot-ts',
-  productName: 'Meeting Copilot',
+  appId: 'com.videodb.sales-copilot',
+  productName: 'Sales Copilot',
   directories: {
     output: 'release',
     buildResources: 'resources',
@@ -43,7 +79,11 @@ const config = {
     target: [
       {
         target: 'dmg',
-        arch: ['arm64'], // Build for current arch first, can add x64 or universal later
+        arch: ['x64', 'arm64'], // Match Python version - build for both architectures
+      },
+      {
+        target: 'zip',
+        arch: ['x64', 'arm64'], // Match Python version
       },
     ],
     category: 'public.app-category.productivity',
@@ -88,6 +128,60 @@ const config = {
     target: ['AppImage'],
     category: 'Office',
   },
+  beforePack: async (context) => {
+    const targetArch = context.arch;
+    console.log('Before pack - target arch:', targetArch);
+
+    // If building for x64 on an arm64 machine, we need to download the x64 cloudflared binary
+    if (process.arch === 'arm64' && targetArch === 1) {
+      // arch 1 = x64 in electron-builder
+      console.log('Detected cross-compilation: arm64 host building for x64 target');
+      console.log('Downloading x64 cloudflared binary...');
+
+      const cloudflaredBinDir = path.join(__dirname, 'node_modules', 'cloudflared', 'bin');
+      const cloudflaredPath = path.join(cloudflaredBinDir, 'cloudflared');
+
+      // Backup current binary
+      if (fs.existsSync(cloudflaredPath)) {
+        const backupPath = path.join(cloudflaredBinDir, 'cloudflared.arm64.bak');
+        fs.renameSync(cloudflaredPath, backupPath);
+        console.log('Backed up arm64 cloudflared binary');
+      }
+
+      // Download x64 binary from cloudflare
+      const downloadUrl =
+        'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz';
+      const tgzPath = path.join(cloudflaredBinDir, 'cloudflared-darwin-amd64.tgz');
+
+      try {
+        await downloadFile(downloadUrl, tgzPath);
+        console.log('Downloaded x64 cloudflared archive');
+
+        // Extract the tgz
+        execSync(`tar -xzf "${tgzPath}" -C "${cloudflaredBinDir}"`, { stdio: 'inherit' });
+        console.log('Extracted x64 cloudflared binary');
+
+        // Cleanup tgz
+        fs.unlinkSync(tgzPath);
+
+        // Verify
+        const fileOutput = execSync(`file "${cloudflaredPath}"`).toString();
+        console.log('New cloudflared binary type:', fileOutput.trim());
+
+        // Set permissions
+        fs.chmodSync(cloudflaredPath, 0o755);
+      } catch (error) {
+        console.error('Failed to download x64 cloudflared:', error.message);
+        // Restore backup if download failed
+        const backupPath = path.join(cloudflaredBinDir, 'cloudflared.arm64.bak');
+        if (fs.existsSync(backupPath)) {
+          fs.renameSync(backupPath, cloudflaredPath);
+          console.log('Restored arm64 cloudflared binary');
+        }
+        throw error;
+      }
+    }
+  },
   afterPack: async (context) => {
     const appOutDir = context.appOutDir;
     const platform = context.packager.platform.name;
@@ -119,12 +213,18 @@ const config = {
           const fileOutput = execSync(`file "${recorderPath}"`).toString();
           console.log('Recorder binary type:', fileOutput.trim());
 
-          // Warn if architecture mismatch
+          // Check architecture compatibility
           const targetArch = context.arch;
-          if (targetArch === 'arm64' && fileOutput.includes('x86_64') && !fileOutput.includes('arm64')) {
+          const isArm64 = targetArch === 'arm64' || targetArch === 2; // arch 2 = arm64 in electron-builder
+          const isX64 = targetArch === 'x64' || targetArch === 1; // arch 1 = x64 in electron-builder
+          
+          if (isArm64 && fileOutput.includes('x86_64') && !fileOutput.includes('arm64')) {
             console.warn('WARNING: Recorder binary is x86_64 but building for arm64!');
             console.warn('The binary will run under Rosetta 2, which may cause issues.');
             console.warn('Consider requesting arm64 binaries from the videodb package maintainers.');
+          } else if (isX64 && fileOutput.includes('arm64') && !fileOutput.includes('x86_64')) {
+            console.warn('WARNING: Recorder binary is arm64 but building for x64!');
+            console.warn('This may cause compatibility issues.');
           }
 
           // Ensure executable permissions

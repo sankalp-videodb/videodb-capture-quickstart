@@ -1,6 +1,7 @@
 import { ipcMain, shell, Notification, BrowserWindow } from 'electron';
 import { loadAppConfig, loadRuntimeConfig, clearAppConfig } from '../lib/config';
 import { VideoDBService } from '../services/videodb.service';
+import { getServerStatus } from '../server';
 import { createChildLogger } from '../lib/logger';
 
 const logger = createChildLogger('ipc-app');
@@ -27,6 +28,11 @@ export function setupAppHandlers(): void {
       };
     }
   );
+
+  ipcMain.handle('get-server-port', async (): Promise<number> => {
+    const status = getServerStatus();
+    return status.port || 51731; // fallback to default
+  });
 
   ipcMain.handle('logout', async (): Promise<void> => {
     logger.info('User logging out');

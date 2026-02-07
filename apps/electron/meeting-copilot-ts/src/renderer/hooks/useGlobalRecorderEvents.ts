@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useSessionStore } from '../stores/session.store';
 import { useTranscriptionStore } from '../stores/transcription.store';
+import { useCopilotStore } from '../stores/copilot.store';
 import { electronAPI } from '../api/ipc';
 import type { RecorderEvent, TranscriptEvent } from '../../shared/types/ipc.types';
 
@@ -61,6 +62,21 @@ export function useGlobalRecorderEvents() {
               transcription.finalizePending(transcript.source, transcript.text);
             } else {
               transcription.updatePending(transcript.source, transcript.text);
+            }
+
+            // Forward transcript to copilot backend (for final segments only)
+            if (transcript.isFinal && useCopilotStore.getState().isCallActive && electronAPI) {
+              // Map source to channel: 'mic' -> 'me', 'system_audio' -> 'them'
+              const channel: 'me' | 'them' = transcript.source === 'mic' ? 'me' : 'them';
+
+              electronAPI.copilot.sendTranscript(channel, {
+                text: transcript.text,
+                is_final: true,
+                start: transcript.start,
+                end: transcript.end,
+              }).catch((err: Error) => {
+                console.warn('[GlobalRecorderEvents] Error forwarding transcript to copilot:', err);
+              });
             }
           }
           break;
