@@ -16,11 +16,20 @@ echo.
 echo Starting Async Recorder (Electron + Python)...
 echo.
 
-REM 1. Check if Python is installed
-where python >nul 2>nul
+REM 1. Check if Python is installed (actually verify it works, not just the Windows stub)
+python --version >nul 2>nul
 if %errorlevel% neq 0 (
-    echo Error: Python is not installed or not in PATH.
-    echo Please install Python 3.10+ from https://python.org
+    echo.
+    echo ============================================
+    echo   ERROR: Python is not installed
+    echo ============================================
+    echo.
+    echo Please install Python 3.10+ from:
+    echo   https://python.org/downloads/
+    echo.
+    echo Make sure to check "Add Python to PATH" during installation.
+    echo.
+    pause
     exit /b 1
 )
 
