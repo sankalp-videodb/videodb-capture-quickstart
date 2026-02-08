@@ -34,6 +34,23 @@ function downloadFile(url, dest) {
   });
 }
 
+function getTargetArchName(arch) {
+  if (arch === 1 || arch === 'x64') return 'x64';
+  if (arch === 2 || arch === 'arm64') return 'arm64';
+  return 'unknown';
+}
+
+function getCloudflaredDownloadUrl(archName) {
+  const archSuffix = archName === 'arm64' ? 'arm64' : 'amd64';
+  return `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${archSuffix}.tgz`;
+}
+
+function matchesCloudflaredArch(fileOutput, archName) {
+  if (archName === 'arm64') return fileOutput.includes('arm64');
+  if (archName === 'x64') return fileOutput.includes('x86_64');
+  return false;
+}
+
 /**
  * @type {import('electron-builder').Configuration}
  */
@@ -61,12 +78,11 @@ const config = {
     },
   ],
   asar: true,
+  // Only unpack binary directories - simpler and more reliable
   asarUnpack: [
-    'node_modules/better-sqlite3/**/*',
-    'node_modules/bindings/**/*',
-    'node_modules/file-uri-to-path/**/*',
-    'node_modules/cloudflared/**/*',
-    'node_modules/videodb/**/*',
+    'node_modules/videodb/bin/**',
+    'node_modules/better-sqlite3/build/**',
+    'node_modules/cloudflared/bin/**',
   ],
   npmRebuild: true,
   nodeGypRebuild: false,
@@ -126,48 +142,75 @@ const config = {
   },
   beforePack: async (context) => {
     const targetArch = context.arch;
-    console.log('Before pack - target arch:', targetArch);
+    const archName = getTargetArchName(targetArch);
+    console.log('Before pack - target arch:', targetArch, archName);
 
-    // Cross-compiling arm64 host → x64 target needs an x64 cloudflared binary.
-    if (process.arch === 'arm64' && targetArch === 1) {
-      console.log('Detected cross-compilation: arm64 host building for x64 target');
-      console.log('Downloading x64 cloudflared binary...');
+    const cloudflaredBinDir = path.join(__dirname, 'node_modules', 'cloudflared', 'bin');
+    const cloudflaredPath = path.join(cloudflaredBinDir, 'cloudflared');
 
-      const cloudflaredBinDir = path.join(__dirname, 'node_modules', 'cloudflared', 'bin');
-      const cloudflaredPath = path.join(cloudflaredBinDir, 'cloudflared');
+    if (!fs.existsSync(cloudflaredBinDir)) {
+      console.warn('Cloudflared bin directory missing:', cloudflaredBinDir);
+      return;
+    }
 
-      if (fs.existsSync(cloudflaredPath)) {
-        const backupPath = path.join(cloudflaredBinDir, 'cloudflared.arm64.bak');
-        fs.renameSync(cloudflaredPath, backupPath);
-        console.log('Backed up arm64 cloudflared binary');
+    // Clean up any leftover backups from previous builds to avoid bundling them.
+    for (const entry of fs.readdirSync(cloudflaredBinDir)) {
+      if (entry.startsWith('cloudflared') && entry.endsWith('.bak')) {
+        fs.unlinkSync(path.join(cloudflaredBinDir, entry));
       }
+    }
 
-      const downloadUrl =
-        'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz';
-      const tgzPath = path.join(cloudflaredBinDir, 'cloudflared-darwin-amd64.tgz');
-
+    let shouldDownload = true;
+    if (fs.existsSync(cloudflaredPath)) {
       try {
-        await downloadFile(downloadUrl, tgzPath);
-        console.log('Downloaded x64 cloudflared archive');
-
-        execSync(`tar -xzf "${tgzPath}" -C "${cloudflaredBinDir}"`, { stdio: 'inherit' });
-        console.log('Extracted x64 cloudflared binary');
-
-        fs.unlinkSync(tgzPath);
-
         const fileOutput = execSync(`file "${cloudflaredPath}"`).toString();
-        console.log('New cloudflared binary type:', fileOutput.trim());
-
-        fs.chmodSync(cloudflaredPath, 0o755);
+        shouldDownload = !matchesCloudflaredArch(fileOutput, archName);
+        console.log('Existing cloudflared binary type:', fileOutput.trim());
       } catch (error) {
-        console.error('Failed to download x64 cloudflared:', error.message);
-        const backupPath = path.join(cloudflaredBinDir, 'cloudflared.arm64.bak');
-        if (fs.existsSync(backupPath)) {
-          fs.renameSync(backupPath, cloudflaredPath);
-          console.log('Restored arm64 cloudflared binary');
-        }
-        throw error;
+        console.warn('Failed to inspect cloudflared binary:', error.message);
       }
+    }
+
+    if (!shouldDownload) {
+      console.log('Cloudflared binary matches target arch, skipping download');
+      return;
+    }
+
+    console.log('Downloading cloudflared binary for target:', archName);
+
+    const backupPath = path.join(cloudflaredBinDir, 'cloudflared.bak');
+    if (fs.existsSync(cloudflaredPath)) {
+      fs.renameSync(cloudflaredPath, backupPath);
+      console.log('Backed up existing cloudflared binary');
+    }
+
+    const downloadUrl = getCloudflaredDownloadUrl(archName);
+    const tgzPath = path.join(cloudflaredBinDir, `cloudflared-darwin-${archName}.tgz`);
+
+    try {
+      await downloadFile(downloadUrl, tgzPath);
+      console.log('Downloaded cloudflared archive:', downloadUrl);
+
+      execSync(`tar -xzf "${tgzPath}" -C "${cloudflaredBinDir}"`, { stdio: 'inherit' });
+      console.log('Extracted cloudflared binary');
+
+      fs.unlinkSync(tgzPath);
+
+      const fileOutput = execSync(`file "${cloudflaredPath}"`).toString();
+      console.log('New cloudflared binary type:', fileOutput.trim());
+
+      fs.chmodSync(cloudflaredPath, 0o755);
+
+      if (fs.existsSync(backupPath)) {
+        fs.unlinkSync(backupPath);
+      }
+    } catch (error) {
+      console.error('Failed to download cloudflared:', error.message);
+      if (fs.existsSync(backupPath)) {
+        fs.renameSync(backupPath, cloudflaredPath);
+        console.log('Restored previous cloudflared binary');
+      }
+      throw error;
     }
   },
   afterPack: async (context) => {

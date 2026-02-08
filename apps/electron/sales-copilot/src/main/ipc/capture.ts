@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, app } from 'electron';
 import { CaptureClient } from 'videodb/capture';
 import { connect } from 'videodb';
 import type { WebSocketConnection, WebSocketMessage } from 'videodb';
@@ -6,6 +6,7 @@ import type { Channel } from '../../shared/schemas/capture.schema';
 import type { RecorderEvent, TranscriptEvent, StartRecordingParams } from '../../shared/types/ipc.types';
 import { registerSessionUser } from '../server/routes/webhook';
 import { createChildLogger } from '../lib/logger';
+import { applyVideoDBPatches } from '../lib/videodb-patch';
 
 const logger = createChildLogger('ipc-capture');
 
@@ -25,6 +26,15 @@ const captureEventHandlers: {
 let micWebSocket: WebSocketConnection | null = null;
 let sysAudioWebSocket: WebSocketConnection | null = null;
 let transcriptListenerActive = false;
+
+function ensureVideoDBPatched(): void {
+  if (!app.isPackaged) return;
+  try {
+    applyVideoDBPatches();
+  } catch (error) {
+    logger.error({ error }, 'Failed to apply VideoDB patches before CaptureClient usage');
+  }
+}
 
 async function setupTranscriptWebSockets(
   sessionToken: string,
@@ -277,6 +287,7 @@ export function setupCaptureHandlers(): void {
           captureClient = null;
         }
 
+        ensureVideoDBPatched();
         logger.info('Creating new CaptureClient');
         captureClient = new CaptureClient({
             sessionToken,
@@ -453,6 +464,7 @@ export function setupCaptureHandlers(): void {
       // Reuse existing captureClient to prevent "Another recorder instance" error
       if (!captureClient) {
         logger.info('Creating CaptureClient for listing channels');
+        ensureVideoDBPatched();
         captureClient = new CaptureClient({
           sessionToken,
           ...(apiUrl && { apiUrl }),
