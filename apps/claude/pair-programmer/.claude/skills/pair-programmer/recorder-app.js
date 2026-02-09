@@ -662,6 +662,59 @@ async function listenToWebSocketEvents() {
 }
 
 // =============================================================================
+// Permissions
+// =============================================================================
+
+async function checkAndRequestPermissions() {
+  if (process.platform !== "darwin") {
+    return { screen: "granted", microphone: "granted" };
+  }
+
+  // Microphone: triggers OS dialog if status is "not-determined"
+  const micGranted = await systemPreferences.askForMediaAccess("microphone");
+
+  // Screen recording: can only check, macOS doesn't allow programmatic request
+  const screenStatus = systemPreferences.getMediaAccessStatus("screen");
+
+  const permissions = {
+    screen: screenStatus,
+    microphone: micGranted ? "granted" : "denied",
+  };
+
+  console.log("Permissions:", JSON.stringify(permissions));
+
+  const missing = [];
+  if (screenStatus !== "granted") missing.push("Screen Recording");
+  if (!micGranted) missing.push("Microphone");
+
+  if (missing.length > 0) {
+    new Notification({
+      title: "VideoDB Recorder — Permissions Required",
+      body: `Grant ${missing.join(" and ")} access in System Settings → Privacy & Security`,
+    }).show();
+
+    // For screen recording, open the right System Settings pane since there's no programmatic request
+    if (screenStatus !== "granted") {
+      require("electron").shell.openExternal(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+      );
+    }
+  }
+
+  return permissions;
+}
+
+function getPermissionStatus() {
+  if (process.platform !== "darwin") {
+    return { screen: "granted", microphone: "granted" };
+  }
+  return {
+    screen: systemPreferences.getMediaAccessStatus("screen"),
+    microphone: systemPreferences.getMediaAccessStatus("microphone"),
+  };
+}
+
+// =============================================================================
 // Recording Control
 // =============================================================================
 
@@ -1143,6 +1196,7 @@ function startAPIServer() {
             "GET /api/context/:type": "Get context (screen/mic/system_audio/all)",
             "POST /api/rtstream/search": "Search within RTStream (body: rtstream_id, query); rtstream_id from GET /api/status",
             "POST /api/rtstream/update-prompt": "Update scene index prompt (body: rtstream_id, scene_index_id, prompt)",
+            "GET /api/permissions": "Check screen and microphone permission status",
             "POST /webhook": "VideoDB webhook endpoint",
           },
           usage: {
@@ -1171,6 +1225,8 @@ function startAPIServer() {
           },
           rtstreams: recording.rtstreams || [],
         };
+      } else if (url === "/api/permissions" && req.method === "GET") {
+        result = { status: "ok", permissions: getPermissionStatus() };
       } else if (url === "/api/rtstream/search" && req.method === "POST") {
         const rtstreamId = body.rtstream_id || body.rtstreamId;
         const query = body.query;
@@ -1491,6 +1547,9 @@ app.whenReady().then(async () => {
         body: "Failed to connect. Check your API key in config.json",
       }).show();
     }
+
+    // Request permissions early (mic dialog + screen recording check)
+    await checkAndRequestPermissions();
 
     // Start HTTP API server for CLI control
     startAPIServer();

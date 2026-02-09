@@ -48,6 +48,25 @@ for i in 1 2 3 4 5; do
   sleep 2
   if lsof -i :$PORT >/dev/null 2>&1; then
     echo "✓ Recorder started on port $PORT"
+
+    # Check permissions
+    PERMS=$(curl -s "http://127.0.0.1:$PORT/api/permissions" 2>/dev/null)
+    SCREEN_PERM=$(echo "$PERMS" | jq -r '.permissions.screen // "unknown"' 2>/dev/null)
+    MIC_PERM=$(echo "$PERMS" | jq -r '.permissions.microphone // "unknown"' 2>/dev/null)
+
+    MISSING=""
+    if [ "$SCREEN_PERM" != "granted" ]; then
+      MISSING="Screen Recording"
+    fi
+    if [ "$MIC_PERM" != "granted" ]; then
+      [ -n "$MISSING" ] && MISSING="$MISSING and "
+      MISSING="${MISSING}Microphone"
+    fi
+
+    if [ -n "$MISSING" ]; then
+      echo "⚠️ ${MISSING} permission not granted. Grant access in System Settings → Privacy & Security."
+    fi
+
     exit 0
   fi
 done

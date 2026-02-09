@@ -34,6 +34,7 @@ All requests: `Content-Type: application/json` for POST. Port from config (`reco
 | POST | `/api/overlay/show` | Show overlay (text or loading) | `{ "text": "Message" }` or `{ "loading": true }` |
 | POST | `/api/overlay/hide` | Hide overlay | — |
 | POST | `/api/rtstream/search` | Search indexed content in a stream | `{ "rtstream_id": "<id from status>", "query": "keywords" }` |
+| GET | `/api/permissions` | Check screen and microphone permission status (macOS) | — |
 
 **Status response** includes `rtstreams`: array of `{ rtstream_id, name, channel_id }`. Use `rtstream_id` in `POST /api/rtstream/search` for semantic search. Use keyword-rich queries.
 
@@ -66,15 +67,15 @@ Run `/record-config`: set VideoDB API key, then start recorder via `bash .claude
 
 ```
 <project root>/
-├── package.json
 └── .claude/
     ├── hooks/
-    │   ├── ensure-recorder.sh   # SessionStart: deps + start recorder
+    │   ├── ensure-recorder.sh   # SessionStart: deps + permissions + start recorder
     │   ├── start-recorder.sh    # Manual start after /record-config
     │   └── cleanup-recorder.sh  # SessionEnd: stop recorder
     ├── settings.json
     ├── commands/                # Slash command definitions (use API)
     └── skills/pair-programmer/
+        ├── package.json        # Electron + videodb deps (self-contained)
         ├── config.json         # recorder_port, API key, indexing
         ├── recorder-app.js     # Electron app + HTTP API server
         └── ui/

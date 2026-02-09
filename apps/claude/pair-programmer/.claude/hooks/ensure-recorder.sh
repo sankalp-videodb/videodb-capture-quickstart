@@ -64,6 +64,25 @@ if lsof -i :$PORT >/dev/null 2>&1; then
   echo "✓ VideoDB Recorder started on port $PORT. Ready for /record."
 else
   echo "⚠️ Recorder failed to start. Check /tmp/videodb-recorder.log"
+  exit 0
+fi
+
+# Check permissions (recorder requests them at startup, we just report status)
+PERMS=$(curl -s "http://127.0.0.1:$PORT/api/permissions" 2>/dev/null)
+SCREEN_PERM=$(echo "$PERMS" | jq -r '.permissions.screen // "unknown"' 2>/dev/null)
+MIC_PERM=$(echo "$PERMS" | jq -r '.permissions.microphone // "unknown"' 2>/dev/null)
+
+MISSING=""
+if [ "$SCREEN_PERM" != "granted" ]; then
+  MISSING="Screen Recording"
+fi
+if [ "$MIC_PERM" != "granted" ]; then
+  [ -n "$MISSING" ] && MISSING="$MISSING and "
+  MISSING="${MISSING}Microphone"
+fi
+
+if [ -n "$MISSING" ]; then
+  echo "⚠️ ${MISSING} permission not granted. Grant access in System Settings → Privacy & Security."
 fi
 
 exit 0
